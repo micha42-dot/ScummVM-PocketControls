@@ -1104,6 +1104,8 @@ static bool hidUsageToScummVM(uint8_t usage, bool shift,
 
 bool OSystem_OpenFPGA::pollEvent(Common::Event &event) {
     openfpga_drive_audio_and_timers();
+    /* Commit any staged config INI (cheap no-op in the common case). */
+    openfpga_config_commit_pending();
 
     if (popQueuedEvent(event))
         return true;
@@ -1787,6 +1789,9 @@ void OSystem_OpenFPGA::delayMillis(uint msecs) {
      * of_audio_write from IRQ produces audible vibrato; main-thread is the safer
      * spot even though it can underrun during long engine work. */
     OpenFPGAMixerManager *mgr = (OpenFPGAMixerManager *)_mixerManager;
+    /* Commit any staged config INI (no-op unless a flushToDisk staged
+     * one and main() has armed commits -- see ConfigWriteStream). */
+    openfpga_config_commit_pending();
     pumpAudioTick(mgr, true);
     while (msecs > 0) {
         usleep(1000);
@@ -1974,40 +1979,141 @@ void OSystem_OpenFPGA::addSysArchivesToSearchSet(Common::SearchSet &s, int prior
 
 /* ScummVM's persistent config slot is per-game (monkey1.ini etc.).
  * main() resolves the actual filename via opendir at startup and
- * stashes it here. */
+ * stashes it here.
+ *
+ * Persistence model -- DEFERRED COMMIT.  ConfMan.flushToDisk() runs in
+ * awkward contexts: notably updateGameGUIOptions() during the engine's
+ * createInstance(), i.e. mid-launch while phdpd's UART link still
+ * expects the app to keep returning to the launcher pump.  A blocking
+ * nonvolatile write there is the same starvation shape as the cdiso
+ * CR's sustained ISO scans (launcher UART ACK timeouts) -- the reason
+ * createConfigWriteStream() used to return nullptr outright.  Instead
+ * of refusing persistence, the stream below never touches the slot
+ * from the flush call: it accumulates the INI image in RAM (256 KB
+ * hard cap, mirroring the SlotOutStream guard in openfpga_save.cpp)
+ * and its destructor only *stages* the finished image.
+ * openfpga_config_commit_pending() performs the actual
+ * fopen/fwrite/fclose (fclose is the commit -- the OS latches the
+ * nonvolatile size on close) and runs from the main-loop pump sites
+ * (delayMillis / pollEvent) once main() arms commits right before
+ * engine->run() -- the same context where the HW-validated save path
+ * already does blocking slot writes -- plus once more after
+ * engine->run() returns, so a flush in the game's final moments still
+ * lands. */
 
 namespace {
 
 char g_iniPath[256] = "";
 const char *iniPath() { return g_iniPath[0] ? g_iniPath : nullptr; }
 
+/* Capacity of the nonvolatile config slot (data.json id 9 "Settings"). */
+enum { kConfigDataMax = 0x40000 };  /* 256 KB */
+
+byte  *g_cfgPending      = nullptr;   /* staged, complete INI image */
+uint32 g_cfgPendingLen   = 0;
+bool   g_cfgPendingValid = false;
+bool   g_cfgCommitArmed  = false;     /* set by main() at engine->run() */
+
 class ConfigWriteStream : public Common::MemoryWriteStreamDynamic {
 public:
-    ConfigWriteStream(const char *path)
+    ConfigWriteStream()
         : Common::MemoryWriteStreamDynamic(DisposeAfterUse::YES),
-          _path(path), _flushed(false), _err(false) {}
+          _staged(false), _err(false) {}
 
-    ~ConfigWriteStream() override { flushToSlot(); }
+    ~ConfigWriteStream() override { stage(); }
 
-    bool flush() override { flushToSlot(); return !_err; }
-    bool err() const override { return _err || Common::MemoryWriteStreamDynamic::err(); }
+    uint32 write(const void *dataPtr, uint32 dataSize) override {
+        /* Hard 256 KB capacity guard, modeled on SlotOutStream in
+         * openfpga_save.cpp: sticky error, and stage() below refuses
+         * to replace the previous (good) config with a truncated one,
+         * so an aborted oversize write leaves the slot untouched. */
+        if (_err || _staged) { _err = true; return 0; }
+        uint32 p = (uint32)pos();
+        if (p >= (uint32)kConfigDataMax ||
+            dataSize > (uint32)kConfigDataMax - p) {
+            warning("[config] INI exceeds the %u-byte slot -- config write aborted",
+                    (uint32)kConfigDataMax);
+            _err = true;
+            return 0;
+        }
+        return Common::MemoryWriteStreamDynamic::write(dataPtr, dataSize);
+    }
+
+    bool flush() override { stage(); return !_err; }
+    bool err() const override { return _err; }
 
 private:
-    void flushToSlot() {
-        if (_flushed) return;
-        _flushed = true;
-        FILE *f = fopen(_path, "wb");
-        if (!f) { _err = true; return; }
-        uint32 n = size();
-        if (n && fwrite(getData(), 1, n, f) != n) _err = true;
-        fclose(f);
+    void stage() {
+        if (_staged) return;
+        _staged = true;
+        if (_err) {
+            warning("[config] not staged (write error/overflow); "
+                    "previous config preserved");
+            return;
+        }
+        uint32 n = (uint32)size();
+        byte *copy = nullptr;
+        if (n) {
+            copy = (byte *)malloc(n);
+            if (!copy) {
+                warning("[config] OOM staging %u bytes; config not persisted", n);
+                return;
+            }
+            memcpy(copy, getData(), n);
+        }
+        free(g_cfgPending);            /* coalesce: newest flush wins */
+        g_cfgPending      = copy;
+        g_cfgPendingLen   = n;
+        g_cfgPendingValid = true;
     }
-    const char *_path;
-    bool        _flushed;
-    bool        _err;
+
+    bool _staged;
+    bool _err;
 };
 
 } // namespace
+
+void openfpga_config_commit_arm(void) {
+    g_cfgCommitArmed = true;
+}
+
+void openfpga_config_commit_pending(void) {
+    if (!g_cfgCommitArmed || !g_cfgPendingValid)
+        return;
+    if (g_pumpBusy)
+        return;                        /* never block inside an audio pump */
+    static bool inCommit = false;
+    if (inCommit)
+        return;
+    inCommit = true;
+
+    /* Take ownership of the staged image up front so a flush triggered
+     * while we're writing restages cleanly instead of aliasing. */
+    byte  *data = g_cfgPending;
+    uint32 len  = g_cfgPendingLen;
+    g_cfgPending      = nullptr;
+    g_cfgPendingLen   = 0;
+    g_cfgPendingValid = false;
+
+    const char *path = iniPath();
+    if (path) {
+        FILE *f = fopen(path, "wb");
+        if (!f) {
+            warning("[config] fopen('%s') failed; config not persisted", path);
+        } else {
+            bool ok = (len == 0) || (fwrite(data, 1, len, f) == len);
+            /* fclose() is the commit: the OS latches the nonvolatile
+             * slot size on close. */
+            if (fclose(f) != 0)
+                ok = false;
+            if (!ok)
+                warning("[config] short write persisting '%s' (%u bytes)",
+                        path, len);
+        }
+    }
+    free(data);
+    inCommit = false;
+}
 
 void openfpga_set_config_path(const char *path) {
     if (!path) { g_iniPath[0] = '\0'; return; }
@@ -2033,15 +2139,15 @@ Common::SeekableReadStream *OSystem_OpenFPGA::createConfigReadStream() {
 }
 
 Common::WriteStream *OSystem_OpenFPGA::createConfigWriteStream() {
-    /* Writes to the nonvolatile config slot currently starve the
-     * launcher's UART pump on the Pocket -- same shape as the ISO read
-     * issue the cdiso CR flagged for the OS-side yielding cache-fill
-     * follow-up.  Until that lands, refuse config persistence so
-     * ScummVM's setAndFlush calls (notably updateGameGUIOptions during
-     * createInstance) early-return from flushToDisk instead of
-     * blocking.  Engine options stay in-memory for the session. */
-    return nullptr;
-    (void)iniPath();
+    /* Deferred-commit stream (see the block comment above
+     * ConfigWriteStream): flushToDisk() only stages the INI image in
+     * RAM here -- the blocking slot write happens later, at the next
+     * delayMillis()/pollEvent() pump after main() arms commits, safely
+     * out of the launcher's UART-critical startup phase (whose pump a
+     * synchronous write here used to starve). */
+    if (!iniPath())
+        return nullptr;
+    return new ConfigWriteStream();
 }
 
 Common::Path OSystem_OpenFPGA::getDefaultConfigFileName() {

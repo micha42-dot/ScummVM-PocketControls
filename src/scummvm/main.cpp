@@ -908,11 +908,19 @@ extern "C" int main(int argc, char **argv) {
      * the engine pushes its first frame (engine->run() does the slow load). */
     openfpga_show_splash();
 
+    /* Launcher-phase UART chatter is done -- from here on, staged config
+     * flushes (see createConfigWriteStream) may commit to the nonvolatile
+     * slot from the delayMillis/pollEvent pump sites. */
+    openfpga_config_commit_arm();
+
     Common::Error result = engine->run();
 
-    /* Engine returned.  Keep the framebuffer up -- the console is reserved
-     * for crashes now (halt() / fatalError()).  Log the exit code over UART
-     * and wait for START with the last game frame still on screen. */
+    /* Engine returned.  Persist any config flush staged in the game's final
+     * moments (blocking is harmless here), keep the framebuffer up -- the
+     * console is reserved for crashes now (halt() / fatalError()).  Log the
+     * exit code over UART and wait for START with the last game frame still
+     * on screen. */
+    openfpga_config_commit_pending();
     snprintf(buf, sizeof(buf), "Game ended: %d", result.getCode());
     status(buf);
 

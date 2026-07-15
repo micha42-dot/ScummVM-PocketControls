@@ -181,6 +181,16 @@ private:
  * Write}Stream / getDefaultConfigFileName resolve through this. */
 void openfpga_set_config_path(const char *path);
 
+/* Config persistence is DEFERRED: flushToDisk() only stages the INI
+ * image in RAM (createConfigWriteStream).  main() calls _arm() right
+ * before engine->run() -- a blocking nonvolatile write any earlier
+ * starves the launcher's UART pump (phdpd ACK timeouts, cf. the cdiso
+ * CR) -- and _commit_pending() performs the actual slot write.  It is
+ * called from the delayMillis/pollEvent pump sites and once by main()
+ * after engine->run() returns; cheap no-op when nothing is staged. */
+void openfpga_config_commit_arm(void);
+void openfpga_config_commit_pending(void);
+
 /* Pump audio + MIDI + timers.  Called from every OSystem entry that
  * may stall the main thread long enough to drain the 21 ms audio FIFO
  * (pollEvent, updateScreen, delayMillis). */
