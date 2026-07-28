@@ -182,6 +182,14 @@ public:
 	uint bytesSynced() const { return _bytesSynced; }
 
 	/**
+	 * openfpga: true when loading and the underlying stream has run dry.
+	 * Reads past EOF return zeroes, which self-terminating formats (e.g.
+	 * SCUMM's 0xFFFF-terminated resource list) never see -- callers use
+	 * this to fail a desynced/truncated load instead of spinning forever.
+	 */
+	bool loadEos() const { return _loadStream && _loadStream->eos(); }
+
+	/**
 	 * Skip a number of bytes in the data stream.
 	 * This is useful to skip obsolete fields in old savestates.
 	 */

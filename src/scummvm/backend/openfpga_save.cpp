@@ -282,11 +282,52 @@ int OpenFPGASaveFileManager::findSlotByName(const char *name) {
 }
 
 int OpenFPGASaveFileManager::findFreeSlot() {
+    /* A slot is FREE only when it is provably empty or carries our own
+     * interrupted-commit tombstone (magic == 0 from the two-phase commit).
+     * "Header didn't parse" is NOT free: that is what an occupied slot looks
+     * like under a transient read-side fault (the v1.0.4 datatable bug) or
+     * after corruption -- overwriting it would destroy a save the user never
+     * chose to replace, and possibly one that is recoverable.  Such slots are
+     * QUARANTINED: skipped here (and invisible to findSlotByName), so the
+     * only ways they change are the user explicitly saving over that name
+     * (impossible while unreadable) or clearing the .sav on the SD card.
+     * Worst case all slots quarantine and saving reports "slots full" --
+     * annoying, but strictly better than silently eating a save. */
     SaveSlotHeader hdr;
     for (int i = 0; i < OPENFPGA_MAX_SAVES; i++) {
         if (!g_savePaths[i][0])
             continue;
-        if (!readHeader(i, &hdr)) return i;
+
+        FILE *f = openSlot(i, "rb");
+        if (!f)
+            continue;               /* unreadable file: conservative, not free */
+
+        if (fseek(f, 0, SEEK_END) != 0) {
+            fclose(f);
+            continue;
+        }
+        long sz = ftell(f);
+        fclose(f);
+
+        if (sz <= 0)
+            return i;               /* virgin or user-deleted slot */
+
+        if (readHeader(i, &hdr))
+            continue;               /* holds a valid save: occupied */
+
+        /* Nonzero content with an unparseable header: tombstone or garbage. */
+        SaveSlotHeader raw;
+        FILE *g = openSlot(i, "rb");
+        if (!g)
+            continue;
+        size_t n = fread(&raw, 1, sizeof(raw), g);
+        fclose(g);
+        if (n == sizeof(raw) && raw.magic == 0)
+            return i;               /* our two-phase tombstone: old data is
+                                     * already gone by construction, reuse */
+
+        warning("[save] slot %d unreadable -- quarantined, will not be "
+                "overwritten (clear its .sav on the SD to reclaim)", i);
     }
     return -1;
 }

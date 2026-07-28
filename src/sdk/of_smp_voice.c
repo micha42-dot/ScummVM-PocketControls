@@ -23,7 +23,6 @@
 #include "include/of_timer.h"
 #include "include/of_services.h"
 #include "include/of_fastram.h"
-#include <stdio.h>
 #include <string.h>
 
 #ifndef SMP_VOICE_ENABLE_TICK_STATS
@@ -178,10 +177,6 @@ static OF_FASTDATA uint8_t  prev_vol_r[SMP_MAX_VOICES];
 
 /* Voices pending steal (waiting for hardware fade-out) */
 #define STEAL_PENDING -2
-
-/* openfpga diagnostic counters: polyphony-saturation steals (see the
- * pass-3/pass-4 sites in voice_alloc). */
-static uint32_t stat_steal_release, stat_steal_active;
 
 /* Ticks a STEAL_PENDING voice waits before voice_cleanup_stolen deactivates
  * its HW voice.  CTRL=0 is an instant cut, so the fade started by
@@ -517,7 +512,6 @@ static int voice_alloc(void)
         }
     }
     if (best >= 0) {
-        stat_steal_release++;
         voice_reclaim(best);
         return best;
     }
@@ -532,26 +526,8 @@ static int voice_alloc(void)
             best_level = voices[i].vol_env.level;
         }
     }
-    if (best >= 0) {
-        /* openfpga diagnostic (UART): a pass-4 steal truncates a note that
-         * is still SOUNDING (attack/sustain), audible as a micro-dropout in
-         * dense scores no matter how healthy the PCM ring is.  Pass-3
-         * (release-tail) steals are near-silent; both counted, only the
-         * audible one triggers the rate-limited print.  Main-thread only
-         * (voice_alloc runs from note-on), so printf is safe here. */
-        stat_steal_active++;
-        {
-            static uint32_t s_last_print_us;
-            uint32_t now_us = OF_SVC->timer_get_us();
-            if ((uint32_t)(now_us - s_last_print_us) >= 1000000u) {
-                printf("[smp] AUDIBLE voice steals: active=%u (release=%u) of %d voices\n",
-                       (unsigned)stat_steal_active,
-                       (unsigned)stat_steal_release, SMP_MAX_VOICES);
-                s_last_print_us = now_us;
-            }
-        }
+    if (best >= 0)
         voice_reclaim(best);
-    }
 
     return best;
 }

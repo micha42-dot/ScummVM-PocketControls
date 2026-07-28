@@ -1770,9 +1770,44 @@ void ScummEngine::saveLoadWithSerializer(Common::Serializer &s) {
 		} else {
 			uint16 tmp;
 			while (s.syncAsUint16LE(tmp), tmp != 0xFFFF) {
+				if (s.loadEos()) {
+					// openfpga: reads past EOF return zeroes, so a desynced
+					// or truncated stream never produces the 0xFFFF
+					// terminator -- without this check the loop spins
+					// forever (frozen session).
+					error("Savegame ends unexpectedly at stream pos %u --\n"
+					      "truncated, or made on a different variant/rip of "
+					      "this game.", s.bytesSynced());
+				}
 				type = (ResType)tmp;
+				if (type > rtLast) {
+					// openfpga: an out-of-range TYPE means the serializer has
+					// desynced from the stream (corrupt payload, or a save
+					// made against different game data / audio configuration).
+					// The upstream assert took the whole session down with a
+					// trap; report the divergence point instead.
+					error("Savegame is not compatible with this game data:\n"
+					      "bad resource type %u at stream pos %u.\n"
+					      "The save was made on a different variant/rip of "
+					      "this game.", (uint)tmp, s.bytesSynced());
+				}
 				while (s.syncAsUint16LE(idx), idx != 0xFFFF) {
-					assert(idx < _res->_types[type].size());
+					if (s.loadEos()) {
+						error("Savegame ends unexpectedly at stream pos %u --\n"
+						      "truncated, or made on a different variant/rip "
+						      "of this game.", s.bytesSynced());
+					}
+					if (idx >= _res->_types[type].size()) {
+						// openfpga: same as above -- a save from a different
+						// data set references resources this data does not
+						// have.  Upstream: assert(idx < size()).
+						error("Savegame is not compatible with this game data:\n"
+						      "resource type %u index %u out of range (max %u) "
+						      "at stream pos %u.\n"
+						      "The save was made on a different variant/rip of "
+						      "this game.", (uint)type, (uint)idx,
+						      (uint)_res->_types[type].size(), s.bytesSynced());
+					}
 					loadResource(s, type, idx);
 					applyWorkaroundIfNeeded(type, idx);
 				}
@@ -2439,7 +2474,15 @@ void ScummEngine::loadResource(Common::Serializer &ser, ResType type, ResId idx)
 	} else if (_res->_types[type]._mode == kDynamicResTypeMode) {
 		uint32 size = 0;
 		ser.syncAsUint32LE(size);
-		assert(size);
+		// openfpga: a zero or absurd size means the serializer has desynced
+		// (upstream asserted on zero and would OOM-crash on garbage).  16 MB
+		// is far beyond any real SCUMM resource but far below the heap.
+		if (size == 0 || size > 16 * 1024 * 1024) {
+			error("Savegame is corrupt or from a different variant/rip of "
+			      "this game:\nresource type %u index %u has size %u at "
+			      "stream pos %u.", (uint)type, (uint)idx, size,
+			      ser.bytesSynced());
+		}
 		byte *ptr = _res->createResource(type, idx, size);
 		ser.syncBytes(ptr, size);
 

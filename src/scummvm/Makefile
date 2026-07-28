@@ -197,18 +197,28 @@ DIRECT_C = $(SDK_DIR)/of_init.c $(SDK_DIR)/of_midi.c $(SDK_DIR)/of_smp_bank.c \
 DIRECT_OBJS = $(call to_obj,$(DIRECT_CPP)) $(call to_obj,$(DIRECT_C))
 
 # ── Compile rules (objects under $(BUILD)/obj, paths mirrored) ───────
+# -MMD -MP: emit header dependency files next to each object and include
+# them below, so editing a HEADER rebuilds every object that includes it.
+# Without this, a change to a class layout (e.g. adding a ScummEngine
+# member in scumm.h) rebuilt only the touched .cpp files and linked
+# MIXED-LAYOUT objects -- stale code read members at old offsets and
+# crashed at boot in ways no source read could explain (2026-07-18:
+# initVirtScreen height assert from a stale gfx.o reading _screenHeight).
+DEPFLAGS = -MMD -MP
 $(BUILD)/obj/up/%.o: ../%.cpp | $(CONFIG_SHADOW)
 	@mkdir -p $(dir $@)
-	$(CXX) $(CORE_CXXFLAGS) -c -o $@ $<
+	$(CXX) $(CORE_CXXFLAGS) $(DEPFLAGS) -c -o $@ $<
 $(BUILD)/obj/up/%.o: ../%.c
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -c -o $@ $<
+	$(CC) $(CFLAGS) $(DEPFLAGS) -c -o $@ $<
 $(BUILD)/obj/%.o: %.cpp | $(CONFIG_SHADOW)
 	@mkdir -p $(dir $@)
-	$(CXX) $(CORE_CXXFLAGS) -c -o $@ $<
+	$(CXX) $(CORE_CXXFLAGS) $(DEPFLAGS) -c -o $@ $<
 $(BUILD)/obj/%.o: %.c
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -c -o $@ $<
+	$(CC) $(CFLAGS) $(DEPFLAGS) -c -o $@ $<
+
+-include $(shell find $(BUILD) -name '*.d' 2>/dev/null)
 
 $(CONFIG_SHADOW): config.h
 	@mkdir -p $(dir $@)
@@ -243,7 +253,7 @@ $$(GEN_$(1)):
 
 $$(EOBJ_$(1)): $(BUILD)/$(1)/obj/%.o: %.cpp $$(GEN_$(1)) | $(CONFIG_SHADOW)
 	@mkdir -p $$(dir $$@)
-	$(CXX) $$(ECXX_$(1)) -c -o $$@ $$<
+	$(CXX) $$(ECXX_$(1)) $(DEPFLAGS) -c -o $$@ $$<
 
 $(BUILD)/scummvm_$$(OUT_$(1)).elf: $$(EOBJ_$(1)) $(DIRECT_OBJS) $(LIBCORE) $(CRT_OBJS) $(APP_LD)
 	$(CXX) $(LDFLAGS) -o $$@ $(CRT_OBJS) $$(EOBJ_$(1)) $(DIRECT_OBJS) $(LIBCORE) $(LIBS) $(LIBGCC)

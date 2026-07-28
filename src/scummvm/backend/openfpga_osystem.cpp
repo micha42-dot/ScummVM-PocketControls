@@ -1764,32 +1764,11 @@ uint32 OSystem_OpenFPGA::getMillis(bool skipRecord) {
     return of_time_ms() - _startTime;
 }
 
-/* Main-thread stall detector (UART diagnostic).  Every audio pump site
- * funnels through here; a gap between pumps longer than the threshold means
- * SOMETHING held the main thread (bridge syscall, compute burst, firmware
- * wait) that long with no audio service.  Correlate the printed gap with
- * [mixer] UNDERRUN lines and the audible stutter: gaps without underruns
- * point at stalls the ring absorbed (or at firmware-side interruptions the
- * app cannot see at all). */
-static void notePumpAlive(void) {
-    static uint32 s_lastPumpMs = 0, s_lastPrintMs = 0;
-    const uint32 now = of_time_ms();
-    if (s_lastPumpMs) {
-        const uint32 gap = now - s_lastPumpMs;
-        if (gap > 150u && (uint32)(now - s_lastPrintMs) >= 1000u) {
-            printf("[pump] main-thread stall %ums\n", (unsigned)gap);
-            s_lastPrintMs = now;
-        }
-    }
-    s_lastPumpMs = now;
-}
-
 /* One guarded audio-servicing tick for delayMillis()'s low-latency loop
  * (g_pumpBusy declared near the top of the file). */
 static void pumpAudioTick(OpenFPGAMixerManager *mgr, bool doUpdate) {
     if (g_pumpBusy)
         return;                 /* nested FS-read pump -- the outer tick covers it */
-    notePumpAlive();
     g_pumpBusy = true;
     extern void openfpga_midi_pump_pending(void);
     extern void openfpga_audiocd_pump(void);
@@ -1838,7 +1817,6 @@ void openfpga_set_pump_managers(Common::TimerManager *t, MixerManager *m) {
 void openfpga_drive_audio_and_timers(void) {
     if (!g_pumpTimerMgr || !g_pumpMixerMgr) return;
     if (g_pumpBusy) return;
-    notePumpAlive();
     g_pumpBusy = true;
     g_pumpTimerMgr->checkTimers();
     openfpga_midi_pump_pending();
@@ -1851,7 +1829,6 @@ void openfpga_drive_audio_and_timers(void) {
 
 void openfpga_mixer_pump_only(void) {
     if (!g_pumpMixerMgr || g_pumpBusy) return;
-    notePumpAlive();
     g_pumpBusy = true;
     /* Light CDDA pump: this runs on latency-critical paths (just before a
      * frame blit in presentFrameInternal, between zip read chunks), where a
@@ -1936,17 +1913,8 @@ void openfpga_pump_during_load(void) {
      * a couple of 32 KB buffer fills inside a millisecond and passes neither.
      * The first 50 ms of a real load run unarmed, which the normal 120 ms
      * cushion covers. */
-    if (s_burstReads >= 4u && (uint32)(now - s_burstStartMs) >= 50u) {
-        /* UART diagnostic: log each ARMING EPISODE (unarmed -> armed), not
-         * each extension -- a real load logs once, flapping in normal play
-         * logs repeatedly.  Correlate with [mixer] UNDERRUN lines. */
-        static uint32 s_armedUntilMs = 0;
-        if ((int32)(now - s_armedUntilMs) > 0)
-            printf("[pump] deep cushion armed (reads=%u span=%ums)\n",
-                   (unsigned)s_burstReads, (unsigned)(now - s_burstStartMs));
-        s_armedUntilMs = now + 600u;
+    if (s_burstReads >= 4u && (uint32)(now - s_burstStartMs) >= 50u)
         openfpga_mixer_extend_cushion(now + 600u);
-    }
 
     /* Keep the cursor moving through long non-yielding loads (SCI room/screen
      * transitions read+decompress large volumes without returning to delayMillis
@@ -2046,6 +2014,7 @@ void openfpga_set_config_path(const char *path) {
     snprintf(g_iniPath, sizeof(g_iniPath), "%s", path);
     of_file_slot_register(9, g_iniPath);
 }
+
 
 Common::SeekableReadStream *OSystem_OpenFPGA::createConfigReadStream() {
     const char *path = iniPath();

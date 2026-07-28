@@ -171,31 +171,6 @@ void OpenFPGAMixerManager::update() {
     const int targetPairs = (!pacedPcmActive && of_time_ms() < g_loadCushionUntilMs)
                                 ? kLoadCushionPairs : g_targetBufferedPairs;
 
-    /* PCM underrun detector (UART diagnostic, `make debug`).  After every
-     * update we know exactly when the ring, left unfed, hits empty:
-     * now + buffered/48 ms (48 kHz stereo pairs).  If the NEXT update
-     * arrives past that deadline with an empty ring, the DAC sat dry for
-     * (now - deadline) ms -- the audible stutter, measured exactly, with
-     * the culprit being whatever ran on the main thread in that window.
-     * A deadline of 0 means nothing was playing, so silence between
-     * sounds never counts.  Rate-limited to one line per second. */
-    static uint32 s_dryDeadlineMs = 0;
-    static uint32 s_underruns = 0, s_lastUnderrunPrintMs = 0;
-    {
-        const uint32 nowMs = of_time_ms();
-        const int entryFree = of_audio_free();
-        int entryBuffered = (_ringCapacity > 0) ? (_ringCapacity - entryFree) : 0;
-        if (s_dryDeadlineMs && entryBuffered <= 0 &&
-            (int32)(nowMs - s_dryDeadlineMs) > 0) {
-            ++s_underruns;
-            if ((uint32)(nowMs - s_lastUnderrunPrintMs) >= 1000u) {
-                printf("[mixer] UNDERRUN #%u: ring dry ~%ums\n",
-                       (unsigned)s_underruns,
-                       (unsigned)(nowMs - s_dryDeadlineMs));
-                s_lastUnderrunPrintMs = nowMs;
-            }
-        }
-    }
     /* Cap one update() call's work.  When the deep load cushion arms, the
      * uncapped loop mixed the ring from 120 ms straight up to 800 ms in ONE
      * call -- ~200 blocks, ~360 ms of CPU with a rate-converted CDDA stream
@@ -219,17 +194,6 @@ void OpenFPGAMixerManager::update() {
         blocks++;
         if (wrote <= 0)
             break;
-    }
-
-    /* Re-arm the underrun detector's drain deadline from the ring's final
-     * depth (48 pairs/ms at 48 kHz).  Zero when the ring is empty and we
-     * wrote nothing: nothing is playing, so a later empty ring is not an
-     * underrun. */
-    {
-        int freePairs = of_audio_free();
-        int buffered = (_ringCapacity > 0) ? (_ringCapacity - freePairs) : 0;
-        s_dryDeadlineMs = (buffered > 0) ? of_time_ms() + (uint32)(buffered / 48)
-                                         : 0;
     }
 }
 
