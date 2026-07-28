@@ -1,0 +1,24 @@
+{
+    "instance": {
+        "magic": "APF_VER_1",
+        "variant_select": { "id": 666, "select": false },
+        "data_slots": [
+            { "id": 1, "filename": "os.bin" },
+            { "id": 2, "filename": "dreamweb_cd_os.ini" },
+            { "id": 3, "filename": "scummvm_dreamweb.elf" },
+            { "id": 4, "filename": "dreamweb.cue" },
+            { "id": 5, "filename": "bank.ofsf" },
+            { "id": 7, "filename": "dreamweb.bin" },
+            { "id": 9, "filename": "dreamweb_cd.ini" },
+            { "id": 10, "filename": "DREAMWEB.D00" },
+            { "id": 11, "filename": "DREAMWEB.D01" },
+            { "id": 12, "filename": "DREAMWEB.D02" },
+            { "id": 13, "filename": "DREAMWEB.D03" },
+            { "id": 14, "filename": "DREAMWEB.D04" },
+            { "id": 15, "filename": "DREAMWEB.D05" },
+            { "id": 16, "filename": "DREAMWEB.D06" },
+            { "id": 17, "filename": "DREAMWEB.D07" },
+            { "id": 18, "filename": "DREAMWEB.D08" }
+        ]
+    }
+}

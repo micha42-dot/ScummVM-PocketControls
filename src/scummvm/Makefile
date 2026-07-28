@@ -10,13 +10,13 @@
 #   make package         build, assemble, zip into releases/<target>/
 #   make debug           build, push the lucasarts ELF over UART, stream console
 #   make clean           remove build-multi/ and the assembled image
-#   make ENGINES=scumm   build a subset (default: scumm agi sci)
+#   make ENGINES=scumm   build a subset (default: scumm agi sci dreamweb)
 #
 # Statically links upstream musl (SDK $(SDK_DIR)/musl/). Per-engine selection is
 # via -DENABLE_<X> + a generated plugins/detection table, independent of the
 # ENABLE_* macros in config.h (the core strips ENABLE_SCUMM from a config shadow).
 
-ENGINES ?= scumm agi sci
+ENGINES ?= scumm agi sci dreamweb
 
 # Utility/pattern rules precede the phony targets, so pin the default goal.
 .DEFAULT_GOAL := all
@@ -81,7 +81,9 @@ DIST      = $(ROOT)/dist/$(APP)
 OUT       = $(ROOT)/build/$(TARGET)/$(APP)
 COMMON    = $(OUT)/Assets/$(APP)/common
 RUNTIME   = $(ROOT)/runtime
-GAME_ASSETS = $(wildcard *.dat *.bin *.cfg)
+# Optional user-supplied game data staged beside this Makefile. The DreamWeb
+# packaging helper produces dreamweb.zip here; it is intentionally untracked.
+GAME_ASSETS = $(wildcard *.dat *.bin *.cfg *.zip)
 
 # ── Flags ───────────────────────────────────────────────────────────
 COMMON_FLAGS  = -march=$(ARCH) -mabi=$(ABI) -O2 -Wall
@@ -127,7 +129,7 @@ CONFIG_SHADOW = $(GENDIR)/config.h
 # trimmed per-ELF by --gc-sections.
 # ENABLE_SCI32 must be in the CORE union too: video/coktel_decoder.cpp (libcore)
 # is gated on it, and sci's video32.o needs its VMD/IMD decoders at link time.
-CORE_ENGINE_FLAGS = -DENABLE_SCUMM -DENABLE_SCI -DENABLE_SCI32 -DENABLE_AGI
+CORE_ENGINE_FLAGS = -DENABLE_SCUMM -DENABLE_SCI -DENABLE_SCI32 -DENABLE_AGI -DENABLE_DREAMWEB
 CORE_CXXFLAGS = -I$(GENDIR) $(CXXFLAGS) $(CORE_ENGINE_FLAGS)
 
 # src path -> object path under $(BUILD)/obj  (../sdk/foo -> up/sdk/foo)

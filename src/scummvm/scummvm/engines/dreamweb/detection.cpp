@@ -43,6 +43,23 @@ static const DebugChannelDef debugFlagList[] = {
 
 #include "dreamweb/detection_tables.h"
 
+/* openfpgaOS launches from a per-game ini and intentionally skips the normal
+ * MD5 scan.  DreamWeb still needs a concrete descriptor because the engine
+ * uses it for language, CD/floppy mode, and file-name prefixes. */
+namespace DreamWeb {
+const DreamWebGameDescription *openFPGAFindGameDesc(const Common::String &gameid,
+		const Common::String &extra, Common::Platform, Common::Language) {
+	if (!gameid.equalsIgnoreCase("dreamweb"))
+		return nullptr;
+
+	/* The supplied game files are the English floppy layout.  Keep the CD row
+	 * available for future CD packages without making detection mandatory. */
+	if (extra.equalsIgnoreCase("CD"))
+		return &gameDescriptions[2];
+	return &gameDescriptions[1];
+}
+} // namespace DreamWeb
+
 class DreamWebMetaEngineDetection : public AdvancedMetaEngineDetection<DreamWeb::DreamWebGameDescription> {
 public:
 	DreamWebMetaEngineDetection():
