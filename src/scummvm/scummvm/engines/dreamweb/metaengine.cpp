@@ -20,6 +20,7 @@
  */
 
 #include "common/savefile.h"
+#include "common/config-manager.h"
 #include "common/translation.h"
 
 #include "graphics/thumbnail.h"
@@ -106,6 +107,7 @@ public:
 	}
 
 	Common::Error createInstance(OSystem *syst, Engine **engine, const DreamWeb::DreamWebGameDescription *desc) const override;
+	Common::Error createInstance(OSystem *syst, Engine **engine, const DetectedGame &gameDescriptor, const void *meDescriptor) override;
 
 	bool hasFeature(MetaEngineFeature f) const override;
 
@@ -120,6 +122,31 @@ public:
 			return Common::String::format("DREAMWEB.D%02d", saveGameIdx);
 	}
 };
+
+namespace DreamWeb {
+extern const DreamWebGameDescription *openFPGAFindGameDesc(const Common::String &gameid,
+		const Common::String &extra, Common::Platform platform, Common::Language language);
+}
+
+Common::Error DreamWebMetaEngine::createInstance(OSystem *syst, Engine **engine,
+		const DetectedGame &gameDescriptor, const void *meDescriptor) {
+	/* openfpgaOS supplies gameid/language/variant in os.ini and skips the
+	 * expensive detector. Recover the descriptor needed by DreamWebEngine. */
+	if (!meDescriptor && ConfMan.hasKey("openfpga_skip_detection") &&
+		ConfMan.getBool("openfpga_skip_detection")) {
+		const Common::String gameid = ConfMan.get("gameid");
+		const Common::String extra = ConfMan.hasKey("extra") ? ConfMan.get("extra") : Common::String();
+		const Common::Platform platform = ConfMan.hasKey("platform")
+			? Common::parsePlatform(ConfMan.get("platform")) : Common::kPlatformUnknown;
+		const Common::Language language = ConfMan.hasKey("language")
+			? Common::parseLanguage(ConfMan.get("language")) : Common::UNK_LANG;
+		meDescriptor = DreamWeb::openFPGAFindGameDesc(gameid, extra, platform, language);
+		if (!meDescriptor)
+			return Common::Error(Common::kUnsupportedGameidError,
+				Common::String::format("openfpga_skip_detection: no DreamWeb detection entry for '%s'", gameid.c_str()));
+	}
+	return AdvancedMetaEngineBase::createInstance(syst, engine, gameDescriptor, meDescriptor);
+}
 
 bool DreamWebMetaEngine::hasFeature(MetaEngineFeature f) const {
 	switch(f) {
