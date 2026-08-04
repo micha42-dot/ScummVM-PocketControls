@@ -297,7 +297,7 @@ endif
 # (instance os.ini/JSON already point at the per-engine ELFs), then we drop ALL
 # engine ELFs into common/ and remove the legacy single-ELF seed image.sh makes.
 release: build
-	@$(SDK_DIR)/platforms/$(TARGET)/image.sh "$(APP)" "$(firstword $(ENGINE_ELFS))" "$(ROOT)" "$(DIST)" $(GAME_ASSETS)
+	@VARIANT="$(VARIANT)" $(SDK_DIR)/platforms/$(TARGET)/image.sh "$(APP)" "$(firstword $(ENGINE_ELFS))" "$(ROOT)" "$(DIST)" $(GAME_ASSETS)
 	@cp $(ENGINE_ELFS) "$(COMMON)/"
 	@rm -f "$(COMMON)/$(APP).elf"
 	@echo "   engine ELFs in common/: $(notdir $(ENGINE_ELFS))"

@@ -24,6 +24,7 @@
 
 extern "C" {
 #include <of_cache.h>
+#include <of_caps.h>
 #include <of_file.h>
 #include <of_gpu.h>
 #include <stdlib.h>
@@ -1196,25 +1197,116 @@ void OSystem_OpenFPGA::serviceInput(bool fromDelay) {
         of_mouse_state_t m;
         of_input_mouse_state(&m);
         if (m.present && (m.dx || m.dy)) {
-            /* The dock reports very large, bursty deltas (observed up to
-             * ~5000/poll), and moveMouse moves in game pixels -- so cap the
-             * per-poll input (limits a single jump to CAP/DIV px) and scale
-             * down by DOCK_MOUSE_DIV, accumulating the remainder so slow
-             * movements still track.  Raise DOCK_MOUSE_DIV to slow it. */
-            static const int DOCK_MOUSE_DIV = 128;
-            static const int DOCK_MOUSE_CAP = 4096;   /* => max ~32 px/poll */
-            static int accX = 0, accY = 0;
-            int rx = (int)m.dx, ry = (int)m.dy;
-            if (rx >  DOCK_MOUSE_CAP) rx =  DOCK_MOUSE_CAP;
-            if (rx < -DOCK_MOUSE_CAP) rx = -DOCK_MOUSE_CAP;
-            if (ry >  DOCK_MOUSE_CAP) ry =  DOCK_MOUSE_CAP;
-            if (ry < -DOCK_MOUSE_CAP) ry = -DOCK_MOUSE_CAP;
-            accX += rx;
-            accY += ry;
-            int mdx = accX / DOCK_MOUSE_DIV;
-            int mdy = accY / DOCK_MOUSE_DIV;
-            accX -= mdx * DOCK_MOUSE_DIV;
-            accY -= mdy * DOCK_MOUSE_DIV;
+            /* The OS decodes the dock's packed int8 sample pairs, so dx/dy
+             * arrive in true mouse counts.  (The 16-bit fields are NOT 8.8
+             * fixed-point: an int16 read of 8.8 data would be bias-free,
+             * but the tracer's closed loops drifted ~+5% -- the phantom
+             * +256 that an int16 read adds per negative low-byte sample,
+             * i.e. the down-right bias.  The fields are {a<<8|b} sample
+             * pairs; the "fractions" were just consecutive -2 samples.)
+             * Convert at DOCK_PX_PER_COUNT (16.16, px = counts*sens>>16),
+             * carrying the remainder so sub-count motion still tracks. */
+            static const int64 DOCK_PX_PER_COUNT = 65536; /* 1.0 px/count */
+            /* Counts pile up in the firmware accumulator across poll gaps
+             * (room loads, script waits) and would land as one giant jump;
+             * clamp the applied step and DISCARD the excess -- banking it
+             * would replay the backlog as a self-moving cursor. */
+            static const int DOCK_MAX_STEP_PX = 64;
+            static int32 accX = 0, accY = 0;           /* px<<16 remainders */
+            /* dx/dy contract is capability-detected, so one app binary runs
+             * on both firmware generations: caps v4 + MOUSE_COUNTS = the OS
+             * decoded the dock's packed int8 sample pairs to true counts;
+             * older OSes pass the packed fields through raw.  The raw-sum
+             * decode (v>>8) + (int8)(v&0xFF) is exact for a single report;
+             * for coalesced reports the low-byte overflow carries into the
+             * high accumulator, leaving only the historical +1-count-per-
+             * negative-b bias (the old slight down-right drift). */
+            static int s_dxIsCounts = -1;
+            if (s_dxIsCounts < 0) {
+                const struct of_capabilities *caps = of_get_caps();
+                s_dxIsCounts = (caps && caps->version >= 4 &&
+                                (caps->os_features & OF_OS_FEAT_MOUSE_COUNTS)) ? 1 : 0;
+            }
+            int32 cx = m.dx, cy = m.dy;
+            if (!s_dxIsCounts) {
+                cx = (m.dx >> 8) + (int8_t)(m.dx & 0xFF);
+                cy = (m.dy >> 8) + (int8_t)(m.dy & 0xFF);
+            }
+            /* Pointer acceleration: velocity -> gain transfer function
+             * (libinput-adaptive shape, Windows-style 16.16 piecewise
+             * encoding).  Gain < 1 at very low speed gives sub-count
+             * precision for verb/inventory clicking, ~1:1 through normal
+             * speeds, ramping to a plateau so a flick crosses the room.
+             * Velocity is an EMA of counts/ms (per-poll deltas are too
+             * quantized to use raw), reset after an idle gap. */
+            static const int32 ACC_V0 = 6554,   ACC_G0 = 32768;  /* 0.1 c/ms -> 0.5x */
+            static const int32 ACC_V1 = 32768,  ACC_G1 = 65536;  /* 0.5 c/ms -> 1.0x */
+            static const int32 ACC_V2 = 196608, ACC_G2 = 196608; /* 3.0 c/ms -> 3.0x */
+            static int32 s_accVel = 0;          /* 16.16 counts/ms EMA */
+            static uint32 s_accLastMs = 0;
+            {
+                uint32 now = getMillis();
+                uint32 dt = now - s_accLastMs;
+                s_accLastMs = now;
+                int32 ax = cx < 0 ? -cx : cx, ay = cy < 0 ? -cy : cy;
+                int32 mag = (ax > ay) ? ax + (ay >> 1) : ay + (ax >> 1);
+                if (dt > 100) {
+                    s_accVel = 0;               /* stale: restart the estimate */
+                    dt = 8;
+                } else if (dt < 1) {
+                    dt = 1;
+                }
+                int32 sp = (int32)(((int64)mag << 16) / (int32)dt);
+                if (s_accVel == 0) {
+                    /* Cold start / post-idle: seed with the observed speed
+                     * instead of ramping from zero -- a fresh stroke used
+                     * to spend its first ~8 polls in the low-gain zone
+                     * regardless of real speed (a visible hesitation). */
+                    s_accVel = sp;
+                } else if (sp > s_accVel) {
+                    s_accVel += (sp - s_accVel) >> 1;   /* rise fast */
+                } else {
+                    s_accVel += (sp - s_accVel) >> 2;   /* decay slow */
+                }
+            }
+            int32 gain;
+            if (s_accVel <= ACC_V0) {
+                gain = ACC_G0;
+            } else if (s_accVel <= ACC_V1) {
+                gain = ACC_G0 + (int32)((int64)(ACC_G1 - ACC_G0) * (s_accVel - ACC_V0) / (ACC_V1 - ACC_V0));
+            } else if (s_accVel <= ACC_V2) {
+                gain = ACC_G1 + (int32)((int64)(ACC_G2 - ACC_G1) * (s_accVel - ACC_V1) / (ACC_V2 - ACC_V1));
+            } else {
+                gain = ACC_G2;
+            }
+            /* "Mouse Speed" from the Pocket menu.  Preferred source: the
+             * dedicated %-slider register (MOUSE_SPEED_PCT, sysreg 0x6C,
+             * cores built >= 2026-07-31; reads 0 on older cores).  Legacy
+             * fallback: the 3-bit list field parked in the settings
+             * register's free bits 22:20 (works on the current core with
+             * the mask-patched firmware).  Else 100%. */
+            int32 speedMul;
+            const uint32 pct = *(volatile uint32 *)0x4000006Cu;
+            if (pct >= 25u && pct <= 400u) {
+                speedMul = (int32)((pct << 16) / 100u);
+            } else {
+                static const int32 SPEED_MUL[8] = {
+                    65536, 32768, 49152, 98304, 131072, 65536, 65536, 65536 };
+                const uint32 platSettings = *(volatile uint32 *)0x40000080u;
+                speedMul = SPEED_MUL[(platSettings >> 20) & 7u];
+            }
+            const int64 scale = ((((int64)DOCK_PX_PER_COUNT * gain) >> 16)
+                                 * speedMul) >> 16;
+            int64 fx = (int64)cx * scale + accX;
+            int64 fy = (int64)cy * scale + accY;
+            int mdx = (int)(fx / 65536);
+            int mdy = (int)(fy / 65536);
+            accX = (int32)(fx - (int64)mdx * 65536);
+            accY = (int32)(fy - (int64)mdy * 65536);
+            if (mdx >  DOCK_MAX_STEP_PX) mdx =  DOCK_MAX_STEP_PX;
+            if (mdx < -DOCK_MAX_STEP_PX) mdx = -DOCK_MAX_STEP_PX;
+            if (mdy >  DOCK_MAX_STEP_PX) mdy =  DOCK_MAX_STEP_PX;
+            if (mdy < -DOCK_MAX_STEP_PX) mdy = -DOCK_MAX_STEP_PX;
             if (mdx || mdy) {
                 _ofGfx->moveMouse(mdx, mdy);
                 dockMoved = true;

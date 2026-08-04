@@ -1746,7 +1746,7 @@ void ScummEngine::saveLoadWithSerializer(Common::Serializer &s) {
 	// Save/load resources
 	//
 	ResType type;
-	ResId idx;
+	ResId idx = 0;
 	if (s.getVersion() >= VER(26)) {
 		// New, more robust resource save/load system. This stores the type
 		// and index of each resource. Thus if we increase e.g. the maximum
@@ -1768,7 +1768,7 @@ void ScummEngine::saveLoadWithSerializer(Common::Serializer &s) {
 			}
 			s.syncAsUint16LE(endMarker);
 		} else {
-			uint16 tmp;
+			uint16 tmp = 0;
 			while (s.syncAsUint16LE(tmp), tmp != 0xFFFF) {
 				if (s.loadEos()) {
 					// openfpga: reads past EOF return zeroes, so a desynced
@@ -2062,7 +2062,7 @@ void ScummEngine::saveLoadWithSerializer(Common::Serializer &s) {
 			}
 		s.syncAsByte(endMarker);
 	} else {
-		uint8 tmp;
+		uint8 tmp = 0;
 		while (s.syncAsByte(tmp), tmp != 0xFF) {
 			type = (ResType)tmp;
 			s.syncAsUint16LE(idx);
@@ -2411,7 +2411,7 @@ void ScummEngine_v100he::saveLoadWithSerializer(Common::Serializer &s) {
 void ScummEngine::loadResourceOLD(Common::Serializer &ser, ResType type, ResId idx) {
 	if (type == rtSound && ser.getVersion() >= VER(23)) {
 		// Save/load only a list of resource numbers that need to be reloaded.
-		uint16 tmp;
+		uint16 tmp = 0;
 		ser.syncAsUint16LE(tmp);
 		if (tmp)
 			ensureResourceLoaded(rtSound, idx);

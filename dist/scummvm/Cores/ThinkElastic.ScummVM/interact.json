@@ -169,6 +169,22 @@
                     "adjust_small": 1,
                     "adjust_large": 4
                 }
+            },
+            {
+                "name": "Mouse Speed %",
+                "id": 91,
+                "type": "slider_u32",
+                "enabled": true,
+                "address": "0xF700000C",
+                "persist": true,
+                "defaultval": 100,
+                "graphical": {
+                    "signed": false,
+                    "min": 25,
+                    "max": 400,
+                    "adjust_small": 5,
+                    "adjust_large": 25
+                }
             }
         ],
         "messages": []

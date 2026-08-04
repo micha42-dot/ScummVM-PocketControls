@@ -52,7 +52,9 @@ PluginType Plugin::getType() const {
 }
 
 const char *Plugin::getName() const {
-	return _pluginObject->getName();
+	// Null-safe: with the port's dynamic_cast == reinterpret_cast (-fno-rtti),
+	// Plugin::get<T>()'s error path reaches here with _pluginObject null.
+	return _pluginObject ? _pluginObject->getName() : "(null plugin)";
 }
 
 StaticPlugin::StaticPlugin(PluginObject *pluginobject, PluginType type) {
