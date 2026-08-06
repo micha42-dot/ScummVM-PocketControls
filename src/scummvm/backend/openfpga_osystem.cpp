@@ -1206,7 +1206,14 @@ void OSystem_OpenFPGA::serviceInput(bool fromDelay) {
              * pairs; the "fractions" were just consecutive -2 samples.)
              * Convert at DOCK_PX_PER_COUNT (16.16, px = counts*sens>>16),
              * carrying the remainder so sub-count motion still tracks. */
-            static const int64 DOCK_PX_PER_COUNT = 65536; /* 1.0 px/count */
+            /* 0.0833 px/count: HW-calibrated (issue #2).  The original 1.0
+             * was ~12x too hot on the 1000+ dpi mice people actually dock;
+             * the reporter's sweet spot was 25% of the 0.25 interim base,
+             * i.e. 0.0625 px/count, which this base puts at slider 75%.
+             * The 25-100 slider therefore spans 0.021-0.083 px/count:
+             * plenty of room below the sweet spot for fine work, and the
+             * top end is where a low-dpi mouse wants to sit. */
+            static const int64 DOCK_PX_PER_COUNT = 5461; /* 0.0833 px/count */
             /* Counts pile up in the firmware accumulator across poll gaps
              * (room loads, script waits) and would land as one giant jump;
              * clamp the applied step and DISCARD the excess -- banking it
@@ -1286,8 +1293,15 @@ void OSystem_OpenFPGA::serviceInput(bool fromDelay) {
              * register's free bits 22:20 (works on the current core with
              * the mask-patched firmware).  Else 100%. */
             int32 speedMul;
-            const uint32 pct = *(volatile uint32 *)0x4000006Cu;
+            uint32 pct = *(volatile uint32 *)0x4000006Cu;
+            /* The accept window stays 25-400 -- it is what distinguishes
+             * "slider register present" from an older core reading 0 --
+             * but values above the menu's own max can only be a stale
+             * persisted setting from an earlier slider range or a
+             * mid-write torn read, so clamp rather than honour them. */
             if (pct >= 25u && pct <= 400u) {
+                if (pct > 100u)
+                    pct = 100u;
                 speedMul = (int32)((pct << 16) / 100u);
             } else {
                 static const int32 SPEED_MUL[8] = {
