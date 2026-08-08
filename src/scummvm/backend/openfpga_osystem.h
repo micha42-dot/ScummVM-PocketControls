@@ -140,9 +140,34 @@ private:
      * spin.  When a bounded wait times out we latch _gpuStalled, stop emitting
      * GPU commands, and present nothing.  Each frame we re-probe the pending
      * fence (a plain MMIO read -- no ring writes); once it retires the menu
-     * has closed and the display is live again, so rendering auto-resumes. */
+     * has closed and the display is live again, so rendering auto-resumes.
+     *
+     * Recovery is deliberately hysteretic.  A menu the user is working in
+     * (dragging a slider) stutters the display rather than freezing it
+     * outright, so the pending fence can retire between two adjustments; a
+     * latch that disarmed on the first retirement would resume emitting
+     * straight into the next freeze, and command emission -- unlike the
+     * fence wait -- can still land in of_gpu's fatal ring-space spin.
+     * _gpuStallHold requires the fence to stay retired for several
+     * consecutive frames before rendering resumes. */
     bool _gpuStalled;
     uint32 _gpuStallToken;
+    uint8 _gpuStallHold;
+    static const uint8 kGpuStallHoldFrames = 4;
+    /* Bytes probed before any emission and again for recovery.  Worst-case
+     * batch is clearFrameBorders(): SET_FB (3 words) + 4x CLEAR_RECT (4 words)
+     * = 19 words; 128 leaves headroom for the submit fence.  The flip needs
+     * far less, but probing one size everywhere keeps arm and recover
+     * symmetric -- a recovery threshold looser than the arm threshold would
+     * resume straight back into a stall. */
+    static const uint32 kGpuProbeBytes = 128;
+    /* Consecutive presents with the last flip fence still outstanding before
+     * we call the display stalled.  Triple buffering means one or two frames
+     * of lag is normal and must NOT trip this; a frozen display never retires
+     * at all, so it trips in ~8 frames and caps the queued-flip backlog at
+     * roughly that many instead of a full ring. */
+    uint8 _flipStallFrames;
+    static const uint8 kFlipStallFrames = 8;
 
     /* True from showSplash() until the engine pushes its first real frame.
      * While set, initSize() must NOT blank the display so the logo stays up
@@ -168,6 +193,10 @@ private:
     /* Bounded, non-fatal replacement for of_gpu_wait(): returns true when the
      * fence retired, false on timeout (caller latches the GPU as stalled). */
     bool waitGpuFenceBounded(uint32 token);
+    /* Re-probes a latched GPU stall and returns true while rendering must stay
+     * suppressed.  Drives recovery, so it has to be called from an every-frame
+     * path (presentFrame), not one that only runs on full blits. */
+    bool gpuStallActive();
     void clearFrameBorders(uint8_t *fb, uint fbW, uint fbH, uint fbStride,
                            int xOff, int yOff, uint copyW, uint copyH);
     void presentFrame();

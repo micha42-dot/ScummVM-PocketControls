@@ -61,7 +61,8 @@ OpenFPGAGraphicsManager::OpenFPGAGraphicsManager()
       _cursorX(160), _cursorY(100), _cursorHotX(0), _cursorHotY(0),
       _cursorW(0), _cursorH(0), _cursorKeycolor(0), _cursorVisible(false),
       _gpuReady(false), _videoBufIdx(-1), _videoFence(0), _gpuCleanMask(0),
-      _gpuStalled(false), _gpuStallToken(0),
+      _gpuStalled(false), _gpuStallToken(0), _gpuStallHold(0),
+      _flipStallFrames(0),
       _splashActive(false), _keypadMode(false),
       _lastEnginePresentMs(0) {
     memset(_screenBuf, 0, sizeof(_screenBuf));
@@ -328,16 +329,40 @@ bool OpenFPGAGraphicsManager::waitGpuFenceBounded(uint32 token) {
     return true;
 }
 
+bool OpenFPGAGraphicsManager::gpuStallActive() {
+    if (!_gpuStalled)
+        return false;
+
+    /* Recovery is probe-driven, NOT fence-driven.  Waiting on _gpuStallToken
+     * assumes that particular fence still retires once the display returns --
+     * an assumption about the stalled GPU's queue that cannot be verified from
+     * here, and if it is wrong the latch sticks forever (picture frozen, audio
+     * still running, restart the only way out).  of_gpu_can_emit() asks the
+     * question that actually matters -- can a command be issued right now
+     * without blocking -- using nothing but live register reads, so recovery
+     * cannot depend on a guess.
+     *
+     * This MUST be driven from a path that runs on every frame.  Recovery used
+     * to live in clearFrameBorders(), which only runs on full-surface blits --
+     * during ordinary dirty-rect gameplay it is never called. */
+    if (!of_gpu_can_emit(kGpuProbeBytes)) {
+        _gpuStallHold = kGpuStallHoldFrames;
+        return true;
+    }
+    if (_gpuStallHold) {
+        --_gpuStallHold;
+        return true;
+    }
+    _gpuStalled = false;
+    return false;
+}
+
 void OpenFPGAGraphicsManager::clearFrameBorders(uint8_t *fb, uint fbW,
                                                 uint fbH, uint fbStride,
                                                 int xOff, int yOff,
                                                 uint copyW, uint copyH) {
-    /* If we latched a stall (menu open), re-probe the pending fence with a
-     * plain register read -- no command emission, so it can never hang on the
-     * unbounded ring-space spin.  Once it retires the menu has closed and the
-     * GPU is live again; fall through to the normal path and resume. */
-    if (_gpuStalled && fb)
-        _gpuStalled = !of_gpu_fence_reached(_gpuStallToken);
+    if (fb)
+        gpuStallActive();
 
     /* CPU fallback: GPU never came up, or it is stalled and we must not emit
      * any commands.  Scrub the whole buffer; updateScreen() overwrites the
@@ -345,6 +370,24 @@ void OpenFPGAGraphicsManager::clearFrameBorders(uint8_t *fb, uint fbW,
     if (!_gpuReady || _gpuStalled || !fb) {
         if (fb)
             memset(fb, 0, fbStride * fbH);
+        return;
+    }
+
+    /* Probe BEFORE the first emission.  waitGpuFenceBounded() only covers the
+     * fence at the end of this batch; the of_gpu_set_framebuffer/clear_rect
+     * calls below run through of_gpu's ring reserve, which spins ~5 s and
+     * then traps -- and per its own comment the ring fills within one frame,
+     * so a display stall lands there long before any fence wait.  That is the
+     * window that kills the core when the menu freezes mid-emission.  Worst
+     * case here is SET_FB (3 words) + 4x CLEAR_RECT (4 words each) = 19 words;
+     * probe 128 bytes for headroom including the submit fence.  Ring space
+     * only grows until we emit, so clearing this probe means the whole batch
+     * fits. */
+    if (!of_gpu_can_emit(kGpuProbeBytes)) {
+        _gpuStalled = true;
+        _gpuStallToken = _videoFence;
+        _gpuStallHold = kGpuStallHoldFrames;
+        memset(fb, 0, fbStride * fbH);
         return;
     }
 
@@ -386,6 +429,7 @@ void OpenFPGAGraphicsManager::clearFrameBorders(uint8_t *fb, uint fbW,
              * the flip; we resume once `token` finally retires. */
             _gpuStalled = true;
             _gpuStallToken = token;
+            _gpuStallHold = kGpuStallHoldFrames;
             memset(fb, 0, fbStride * fbH);
         }
     }
@@ -395,11 +439,45 @@ void OpenFPGAGraphicsManager::presentFrame() {
     /* While the GPU is stalled (menu open) emit nothing: a flip command would
      * pile into a ring the frozen GPU never drains, and acquire_next() would
      * block on a fence that never retires.  The menu owns the screen anyway;
-     * the first live frame after recovery presents normally. */
-    if (_gpuStalled)
+     * the first live frame after recovery presents normally.
+     *
+     * This is the every-frame path, so it is what drives stall recovery --
+     * see gpuStallActive(). */
+    if (gpuStallActive())
         return;
 
     if (_gpuReady && _videoBufIdx >= 0) {
+        /* Early stall detection.  Waiting for of_gpu_can_emit() to fail means
+         * waiting for the ring to FILL, and a 16 KB ring holds over a thousand
+         * flip commands -- which the GPU then retires one per vsync once the
+         * display returns.  A short menu visit therefore replayed as tens of
+         * seconds of frozen picture while the backlog drained, looking for all
+         * the world like a hang (audio unaffected, input apparently dead
+         * because nothing rendered).  A live display retires a flip within a
+         * frame or two, so a fence still outstanding across kFlipStallFrames
+         * consecutive presents means the display has stopped consuming: latch
+         * now, having queued a handful of flips instead of a ring full. */
+        if (_videoFence && !of_gpu_fence_reached(_videoFence)) {
+            if (++_flipStallFrames >= kFlipStallFrames) {
+                _gpuStalled = true;
+                _gpuStallToken = _videoFence;
+                _gpuStallHold = kGpuStallHoldFrames;
+                _flipStallFrames = 0;
+                return;
+            }
+        } else {
+            _flipStallFrames = 0;
+        }
+
+        /* Backstop: the ring is genuinely full (a stall that outran the
+         * detector above).  Never emit into it -- that is of_gpu's fatal
+         * ring-space spin. */
+        if (!of_gpu_can_emit(kGpuProbeBytes)) {
+            _gpuStalled = true;
+            _gpuStallToken = _videoFence;
+            _gpuStallHold = kGpuStallHoldFrames;
+            return;
+        }
         _videoFence = of_gpu_flip_to(_videoBufIdx);
         of_gpu_kick();
         _videoBufIdx = of_video_acquire_next(_videoBufIdx, _videoFence);

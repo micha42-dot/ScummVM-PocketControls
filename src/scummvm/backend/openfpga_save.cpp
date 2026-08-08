@@ -315,6 +315,11 @@ int OpenFPGASaveFileManager::findFreeSlot() {
         if (readHeader(i, &hdr))
             continue;               /* holds a valid save: occupied */
 
+        /* A file too small to hold the header provably cannot hold a save,
+         * so there is nothing for the quarantine to protect. */
+        if (sz < (long)SAVE_HEADER_SIZE)
+            return i;
+
         /* Nonzero content with an unparseable header: tombstone or garbage. */
         SaveSlotHeader raw;
         FILE *g = openSlot(i, "rb");
@@ -325,6 +330,26 @@ int OpenFPGASaveFileManager::findFreeSlot() {
         if (n == sizeof(raw) && raw.magic == 0)
             return i;               /* our two-phase tombstone: old data is
                                      * already gone by construction, reuse */
+
+        /* UNBACKED SLOT: no .sav for this data slot exists on the card.
+         * The kernel does not report those as empty -- sys_openat
+         * substitutes of_nvslot_capacity() for a read-only save open whose
+         * datatable size reads 0, so a game can still probe a header whose
+         * size word went stale across a launcher/build transition.  The
+         * Pocket bridge never loaded anything into that CRAM0 window and it
+         * is NOT cleared between core runs, so what we read back is the
+         * previous run's leftovers: nonzero, unparseable, and stable across
+         * resets -- exactly the quarantine signature.  Quarantining
+         * uninitialised memory protects nothing and burns the slot forever.
+         *
+         * Capacity-sized AND unparseable therefore means "never held a
+         * save", so reclaim it.  This does not weaken the v1.0.4 guard: a
+         * slot backed by a real file reports THAT file's size, so a backed
+         * save with an unreadable header still quarantines below.  (A slot
+         * that was loaded but whose size word went stale also reports
+         * capacity -- but then its header parses and we returned above.) */
+        if (sz == (long)OPENFPGA_SAVE_SIZE)
+            return i;
 
         warning("[save] slot %d unreadable -- quarantined, will not be "
                 "overwritten (clear its .sav on the SD to reclaim)", i);
