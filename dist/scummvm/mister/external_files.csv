@@ -1,0 +1,39 @@
+# openfpgaOS — ScummVM freeware game-data list for the MiSTer Downloader database.
+#
+# THIS IS A BUILD INPUT, NOT A DEVICE FILE.  The device never reads it.  It is
+# consumed by  src/sdk/platforms/mister/mkdb.py  at package time, which folds
+# each valid row into the generated  scummvm.json.zip  (the real Downloader
+# custom-database artifact).  The MiSTer Downloader then fetches these files
+# straight from their own absolute URLs onto the SD card at the given sd_path.
+#
+# Only FREEWARE game data belongs here.  Every instance this port ships
+# (LucasArts SCUMM, Sierra SCI/AGI, DreamWeb) needs COMMERCIAL game data that
+# can NOT be redistributed: the user copies their own data file — the one named
+# by  [scummvm] data_file=  in that instance's *_os.ini, e.g. monkey1.iso — into
+#   games/OpenfpgaOS/ScummVM/wads/
+# and runs setup.sh, which injects it into boot.vhd's /ScummVM/common tree
+# (the "wads" directory name comes from the shared SDK setup.sh; it takes any
+# file, ISO/ZIP/CUE included).
+#
+# Format — one file per row, comma-separated:
+#   sd_path , url , size , md5 , tags
+#     sd_path : on-SD path relative to /media/fat (mirrors the DB layout)
+#     url     : absolute http(s) source for the exact hosted file
+#     size    : file size in bytes (integer)
+#     md5     : lowercase 32-hex MD5 of the hosted file
+#     tags    : space-separated Downloader filter tags (users can filter these
+#               out of the sync, e.g. add  filter = !freeware  in downloader.ini)
+#
+# Rows with a TODO_ field are SKIPPED by mkdb.py (with a warning) — the DB stays
+# valid, that data just is not offered until a real size+md5 is pinned.  Do NOT
+# invent hashes, and do NOT add a row whose hosted artifact is not the exact
+# single file this port loads.
+#
+# TODO(maintainer): the only shipped instance whose data is freely licensed is
+# DreamWeb (freeware since 2013, hosted on scummvm.org/games).  It is NOT listed
+# below because the published artifact is a ZIP of loose game files, while the
+# DreamWeb instance loads a single  dreamweb.iso  (see dreamweb_os.ini) — the
+# shapes do not match, so no honest row can be written yet.  Pin a row here only
+# once a direct URL serves the exact file the instance opens.
+#
+sd_path,url,size,md5,tags

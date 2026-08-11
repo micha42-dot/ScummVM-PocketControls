@@ -264,7 +264,7 @@ $(foreach E,$(ENGINES),$(eval $(call ENGINE_template,$(E))))
 ENGINE_ELFS = $(foreach E,$(ENGINES),$(BUILD)/scummvm_$(OUT_$(E)).elf)
 
 # ── Targets ─────────────────────────────────────────────────────────
-.PHONY: all build release copy package debug clean
+.PHONY: all build release copy package debug clean game-dist
 
 # `make` builds every engine ELF, then assembles the SD-card image.
 all: release
@@ -296,17 +296,127 @@ endif
 # Assemble the deployable tree: image.sh wipes+rebuilds $(OUT) from dist/
 # (instance os.ini/JSON already point at the per-engine ELFs), then we drop ALL
 # engine ELFs into common/ and remove the legacy single-ELF seed image.sh makes.
+#
+# MiSTer has no image.sh — its deliverable is the per-game bundle (game-dist
+# below), so `release` branches on TARGET.  Without this guard a mister build
+# links fine and then dies with exit 127 on the missing platforms/mister/image.sh.
+ifeq ($(TARGET),mister)
+release: game-dist        # MiSTer: the per-game bundle IS the release artifact
+else
 release: build
 	@VARIANT="$(VARIANT)" $(SDK_DIR)/platforms/$(TARGET)/image.sh "$(APP)" "$(firstword $(ENGINE_ELFS))" "$(ROOT)" "$(DIST)" $(GAME_ASSETS)
 	@cp $(ENGINE_ELFS) "$(COMMON)/"
 	@rm -f "$(COMMON)/$(APP).elf"
 	@echo "   engine ELFs in common/: $(notdir $(ENGINE_ELFS))"
+endif
 
+# MiSTer engine update: every instance F-loads the ELF its ini names, and this
+# port ships ONE ELF PER ENGINE, so a per-game engine update pushes them all as
+# loose games/OpenfpgaOS/ScummVM/<engine>.elf files — boot.vhd (the user's game
+# data) and the saves volume are untouched.
 copy: all
+ifeq ($(TARGET),mister)
+	@for e in $(ENGINE_ELFS); do \
+	    MISTER_IP="$(MISTER_IP)" $(SDK_DIR)/platforms/mister/copy.sh \
+	        game "$(GAME)" "$$(basename $$e)" "$$e" || exit 1; \
+	done
+else
 	@MISTER_IP="$(MISTER_IP)" $(SDK_DIR)/platforms/$(TARGET)/copy.sh "$(APP)" "$(firstword $(ENGINE_ELFS))"
+endif
 
+# `make package` for MiSTer builds the per-game locked distribution (a boot.vhd
+# shell + .mgl launchers + loose inis + setup.sh + external_files.csv, zipped for
+# games/OpenfpgaOS/); every other target keeps the single-image path.
+# scripts/package.sh -> platforms/<target>/package.sh auto-detects which.
+#
+# For MiSTer it ALSO generates the Downloader custom-database delivery artifact
+# (releases/mister/scummvm.json.zip) via mkdb.py — a real ZIP-wrapped JSON the
+# stock MiSTer Downloader syncs.  external_files.csv is folded into it here at
+# build time (it is NOT a device file).  db_id must never change once published.
+#
+# Publishing model (edit these for the real release):
+#   MISTER_DB_ID       downloader.ini [section] == db_id — unique to THIS game
+#   MISTER_DB_BASE_URL where the STAGED tree is hosted; a local file at sd path
+#                      <p> resolves to  $(MISTER_DB_BASE_URL)<p>  (base_files_url
+#                      + path — the Downloader's own rule).  Host the game-dist
+#                      tree under games/OpenfpgaOS/ at this base.
+#   MISTER_DB_URL      where scummvm.json.zip itself is published (ini snippet)
+MISTER_DB_ID       ?= thinkelastic/openfpgaos-scummvm
+MISTER_DB_BASE_URL ?= https://raw.githubusercontent.com/thinkelastic/ScummVM/mister-dist/
+MISTER_DB_URL      ?= https://raw.githubusercontent.com/thinkelastic/ScummVM/mister-dist/scummvm.json.zip
+MISTER_DB          = $(ROOT)/releases/mister/$(APP).json.zip
+MISTER_DB_INI      = $(ROOT)/releases/mister/$(APP).downloader.ini
+ifeq ($(TARGET),mister)
+package: game-dist
+	@$(ROOT)/scripts/package.sh $(APP)
+	@$(SDK_DIR)/platforms/mister/mkdb.py \
+	    --staging "$(GAME_STAGE)" --sd-prefix "games/OpenfpgaOS" \
+	    --menu-dir "_Computer/_OpenfpgaOS/_$(GAME)" \
+	    --base-url "$(MISTER_DB_BASE_URL)" --db-id "$(MISTER_DB_ID)" \
+	    --external "$(GAME_CSV)" --db-url "$(MISTER_DB_URL)" \
+	    --output "$(MISTER_DB)" --ini-out "$(MISTER_DB_INI)"
+else
 package: all
 	@$(ROOT)/scripts/package.sh $(APP)
+endif
+
+# ── MiSTer per-game locked distribution (S0 boot shell + S1 saves + .mgl) ─
+# The core (openfpgaOS.rbf + os.bin) is game-agnostic.  ScummVM ships a pair of
+# images: a READ-ONLY boot.vhd (S0 — /ScummVM/common: bank.ofsf plus whatever
+# game data the user injects on-device; NO engine ELF) and a writable
+# ScummVM.saves.vhd (S1 — one /ScummVM/<Instance> subfolder of preallocated
+# config/save slots per instance ini).  Splitting them keeps saves on a separate,
+# Downloader-reserved volume so an update can replace boot.vhd without touching
+# the player's saves.  The engine ELFs ship as LOOSE files next to boot.vhd: the
+# firmware F-loads the one named by the launched instance's ini at ioctl index 2
+# into ELF staging and serves it as slot 3, so an engine update is a loose-file
+# swap and boot.vhd never changes.  Also ships: a 4-line .mgl launcher per
+# instance (S0 boot + S1 saves + F-load ELF index 2 + F-load ini index 1; ELF
+# BEFORE ini — the ini F-load resets and triggers the app load), the loose
+# per-instance inis, setup.sh (seeds the saves image + injects the user's game
+# data) and external_files.csv (freeware data list).
+# `make package TARGET=mister` builds and zips this bundle.
+#
+# GAME_INIS_SRC: canonical per-instance inis, shared with the Pocket asset tree
+# GAME_INIS    : the subset that ships as MiSTer instances (staged copy — the
+#                pocket-only exampleControlMap_* doc sample is not a game)
+# GAME_STAGE   : games/OpenfpgaOS/-rooted staging that package.sh zips
+# GAME_COMMON  : throwaway dir feeding mkgame the bank.ofsf (kept OUT of the
+#                staging so it is never zipped)
+# GAME_ELF     : the primary engine ELF (SCUMM); every engine ELF ships, and
+#                each instance's ini names the one it F-loads
+# BOOT_MB      : boot.vhd size.  ScummVM game data is far larger than a Doom
+#                wad (talkie CD releases are hundreds of MB) and all instances
+#                share ONE boot shell, so the shell is sized for a usable
+#                injection budget instead of mkgame's 48 MB floor.  The image is
+#                empty (sparse) — it costs SD space, not download size.
+GAME          = ScummVM
+GAME_INIS_SRC = $(DIST)/Assets/$(APP)/common
+GAME_INIS     = $(ROOT)/build/mister/.$(APP)-inis
+GAME_INI_SKIP = exampleControlMap_tentacle_os.ini
+GAME_STAGE    = $(ROOT)/build/mister/$(APP)
+GAME_COMMON   = $(ROOT)/build/mister/.$(APP)-common
+GAME_ELF      = scummvm_lucasarts.elf
+GAME_CSV      = $(DIST)/mister/external_files.csv
+BOOT_MB      ?= 1024
+
+game-dist: build
+	@rm -rf "$(GAME_STAGE)" "$(GAME_COMMON)" "$(GAME_INIS)"
+	@mkdir -p "$(GAME_STAGE)/$(GAME)/wads" "$(GAME_COMMON)" "$(GAME_INIS)"
+	@cp "$(RUNTIME)/bank.ofsf" "$(GAME_COMMON)/bank.ofsf"
+	@for f in $(GAME_INIS_SRC)/*.ini; do \
+	    case "$$(basename $$f)" in $(GAME_INI_SKIP)) continue ;; esac; \
+	    cp "$$f" "$(GAME_INIS)/"; \
+	done
+	@$(SDK_DIR)/platforms/mister/mkgame.sh --no-elf --saves-out "$(GAME_STAGE)/$(GAME)/$(GAME).saves.vhd" "$(GAME)" "$(GAME_INIS)" "$(GAME_COMMON)" "$(GAME_STAGE)/$(GAME)/boot.vhd" $(BOOT_MB)
+	@$(SDK_DIR)/platforms/mister/mkmgl.sh "$(GAME)" "$(GAME_INIS)" "$(GAME_STAGE)"
+	@cp $(ENGINE_ELFS) "$(GAME_STAGE)/$(GAME)/"
+	@cp "$(GAME_INIS)"/*.ini "$(GAME_STAGE)/$(GAME)/"
+	@sed 's|^GAME_DEFAULT=.*|GAME_DEFAULT="$(GAME)"|' "$(SDK_DIR)/platforms/mister/setup.sh" > "$(GAME_STAGE)/$(GAME)/setup.sh"
+	@chmod +x "$(GAME_STAGE)/$(GAME)/setup.sh"
+	@cp "$(GAME_CSV)" "$(GAME_STAGE)/$(GAME)/external_files.csv"
+	@rm -rf "$(GAME_COMMON)" "$(GAME_INIS)"
+	@echo "  game-dist staged -> $(GAME_STAGE)"
 
 # UART push + console: debug the SCUMM (lucasarts) ELF by default.
 debug: all
