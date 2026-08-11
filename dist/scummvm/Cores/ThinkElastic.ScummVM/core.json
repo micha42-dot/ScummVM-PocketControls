@@ -7,7 +7,7 @@
             "description": "ScummVM on openfpgaOS",
             "author": "ThinkElastic",
             "url": "",
-            "version": "1.0.7",
+            "version": "1.0.8",
             "date_release": "2026-08-07"
         },
         "framework": {

@@ -228,12 +228,10 @@ ScummPAKFile::ScummPAKFile(const ScummEngine *vm, bool indexFiles) : ScummFile(v
 void ScummPAKFile::readIndex(const Common::Path &containerFile, bool isFT) {
 	// Based off DoubleFine Explorer: https://github.com/bgbennyboy/DoubleFine-Explorer/blob/master/uDFExplorer_LPAKManager.pas
 	if (!ScummFile::open(containerFile)) {
-		// Everything below dereferences _baseStream, so a failed open here used
-		// to run straight into a null dereference.  On targets where address 0
-		// is mapped (openfpga: page 0 is BRAM) that does not fault -- it loads a
-		// garbage vtable pointer and execution wanders off, presenting as a
-		// silent hang with no trap and no output.  Fail loudly instead, the same
-		// way ScummEngine::ScummEngine() does for the Mac container formats.
+		// Everything below dereferences _baseStream.  Where address 0 is mapped
+		// (openfpga: page 0 is BRAM) the null deref does not fault — it loads a
+		// garbage vtable and wanders off, giving a silent hang.  Fail loudly, as
+		// ScummEngine::ScummEngine() does for the Mac containers.
 		error("ScummPAKFile: couldn't open container file '%s'",
 		      containerFile.toString(Common::Path::kNativeSeparator).c_str());
 	}

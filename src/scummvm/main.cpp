@@ -535,28 +535,16 @@ extern "C" int main(int argc, char **argv) {
     GameConfig cfg;
     bool cfgLoaded = loadGameConfigFromOS(cfg);
 
-    /* The ini's `data_file` is AUTHORITATIVE whenever it names a file the
-     * launcher actually exposed -- it OVERRIDES the scan above, it is not
-     * merely a fallback for it.
+    /* `data_file` overrides the scan above; it is not a fallback for it.
      *
-     * The scan takes the FIRST data image it encounters, which is only ever
-     * correct when the instance sees exactly one.  On MiSTer that assumption
-     * does not hold: slots 4-6 and 20+ are enumerated from the shared
-     * `common/` folder (targets/mister/file.c), so an instance sees EVERY
-     * game's image at once and first-wins resolves to whichever sorts
-     * earliest in the FAT directory -- not this instance's.  With
-     * common/{bank.ofsf,kq6.iso,lsl7.iso,monkey1.iso} that is always kq6.iso,
-     * so every ScummVM game mounted King's Quest 6's disc at /cd.  KQ6 itself
-     * booted fine (it got the right disc by luck); Monkey Island 1 mounted a
-     * disc with no monkey1.pak on it and died in the engine. */
+     * The scan takes the FIRST data image it sees, which only works when the
+     * instance sees exactly one.  MiSTer enumerates slots 4-6 and 20+ from the
+     * shared common/ folder, so every instance sees every game's image and
+     * first-wins picks whichever sorts earliest — kq6.iso for all of them. */
     if (cfgLoaded && cfg.data_file[0] && slotFileExists(cfg.data_file)) {
-        /* Resolve the destination FIRST, and only then displace the scan's
-         * guesses.  Clearing up front would strand an instance whose
-         * data_file carries an extension none of the three branches match
-         * (a typo, or a container kind added to the ini before it is added
-         * here): all three paths would end up empty and the "missing game
-         * data" halt below would fire even though the scan had already
-         * found a perfectly usable image. */
+        /* Resolve the destination before displacing the scan's guesses: an
+         * unrecognised extension must not leave all three empty and trip the
+         * "missing game data" halt below. */
         char  *dst = NULL;
         size_t cap = 0;
         if (hasExtensionI(cfg.data_file, ".zip"))       { dst = zipPath; cap = sizeof(zipPath); }
