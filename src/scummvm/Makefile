@@ -341,9 +341,12 @@ endif
 #                      + path — the Downloader's own rule).  Host the game-dist
 #                      tree under games/OpenfpgaOS/ at this base.
 #   MISTER_DB_URL      where scummvm.json.zip itself is published (ini snippet)
-MISTER_DB_ID       ?= thinkelastic/openfpgaos-scummvm
-MISTER_DB_BASE_URL ?= https://raw.githubusercontent.com/thinkelastic/ScummVM/mister-dist/
-MISTER_DB_URL      ?= https://raw.githubusercontent.com/thinkelastic/ScummVM/mister-dist/scummvm.json.zip
+# Owner tracks the actual remote: github.com/openfpgaOS/ScummVM.  The old
+# thinkelastic/ owner was stale, so every generated downloader.ini pointed at
+# a 404.
+MISTER_DB_ID       ?= openfpgaOS/openfpgaos-scummvm
+MISTER_DB_BASE_URL ?= https://raw.githubusercontent.com/openfpgaOS/ScummVM/mister-dist/
+MISTER_DB_URL      ?= https://raw.githubusercontent.com/openfpgaOS/ScummVM/mister-dist/scummvm.json.zip
 MISTER_DB          = $(ROOT)/releases/mister/$(APP).json.zip
 MISTER_DB_INI      = $(ROOT)/releases/mister/$(APP).downloader.ini
 ifeq ($(TARGET),mister)
