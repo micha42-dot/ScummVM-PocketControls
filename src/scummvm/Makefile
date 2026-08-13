@@ -347,8 +347,15 @@ endif
 # the newest release, so a user's downloader.ini never goes stale, and the DB
 # is generated --url-mode flat to match the flat asset namespace.
 MISTER_DB_ID       ?= openfpgaOS/openfpgaos-scummvm
-MISTER_DB_BASE_URL ?= https://github.com/openfpgaOS/ScummVM/releases/latest/download/
-MISTER_DB_URL      ?= https://github.com/openfpgaOS/ScummVM/releases/latest/download/scummvm.json.zip
+# Version of THIS app's core.json — pins the DB's asset URLs to this
+# release's own tag.  releases/latest/download is ONE pointer per REPO:
+# with several release streams (doom/heretic/hexen) it resolves to
+# whichever core released last, serving the wrong stream's assets.
+MISTER_DB_VER  := $(shell python3 -c "import glob,json;print(json.load(open(sorted(glob.glob('$(DIST)/Cores/*/core.json'))[0]))['core']['metadata']['version'])" 2>/dev/null || echo 0.0.0)
+MISTER_DB_BASE_URL ?= https://github.com/openfpgaOS/ScummVM/releases/download/scummvm-mister-v$(MISTER_DB_VER)/
+# The DB itself is tiny — committed to the repo and served via raw, a
+# stable per-game pointer immune to the shared 'latest' problem.
+MISTER_DB_URL      ?= https://raw.githubusercontent.com/openfpgaOS/ScummVM/main/releases/mister/scummvm.json.zip
 MISTER_DB          = $(ROOT)/releases/mister/$(APP).json.zip
 MISTER_DB_INI      = $(ROOT)/releases/mister/$(APP).downloader.ini
 ifeq ($(TARGET),mister)
