@@ -426,6 +426,7 @@ game-dist: build
 	    cp "$$f" "$(GAME_INIS)/"; \
 	done
 	@$(SDK_DIR)/platforms/mister/mkgame.sh --no-elf --saves-out "$(GAME_STAGE)/$(GAME)/$(GAME).saves.vhd" "$(GAME)" "$(GAME_INIS)" "$(GAME_COMMON)" "$(GAME_STAGE)/$(GAME)/boot.vhd" $(BOOT_MB)
+	@gzip -9nf "$(GAME_STAGE)/$(GAME)"/boot*.vhd
 	@$(SDK_DIR)/platforms/mister/mkmgl.sh "$(GAME)" "$(GAME_INIS)" "$(GAME_STAGE)"
 	@cp $(ENGINE_ELFS) "$(GAME_STAGE)/$(GAME)/"
 	@cp "$(GAME_INIS)"/*.ini "$(GAME_STAGE)/$(GAME)/"
