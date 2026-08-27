@@ -145,19 +145,23 @@ if [ "$PUBLISH" = "1" ]; then
     MODE_DESC="LIVE"
 fi
 
-# Downloader assets.  The DB is generated --url-mode flat against
-# releases/latest/download/, so EVERY file it references must be attached here
-# as a flat asset (basenames are unique per bundle).  Hosting on releases
-# rather than a dist branch is what allows the multi-hundred-MB .vhd images:
-# raw.githubusercontent refuses anything over 100 MB.
+# Downloader assets — only for targets that publish a Downloader DB (mister).
+# The DB is generated --url-mode flat against releases/latest/download/, so
+# EVERY file it references must be attached here as a flat asset (basenames
+# are unique per bundle).  Hosting on releases rather than a dist branch is
+# what allows the multi-hundred-MB .vhd images: raw.githubusercontent refuses
+# anything over 100 MB.  A target with no releases/<t>/<core>.json.zip
+# (pocket) ships exactly one asset: the bundle ZIP.
+DB_ZIP="$SDK_DIR/releases/$TARGET/$CORE.json.zip"
 ASSETS=()
-if [ -d "$BUNDLE" ]; then
-    while IFS= read -r f; do ASSETS+=("$f"); done < <(find "$BUNDLE" -type f | sort)
+if [ -f "$DB_ZIP" ]; then
+    if [ -d "$BUNDLE" ]; then
+        while IFS= read -r f; do ASSETS+=("$f"); done < <(find "$BUNDLE" -type f | sort)
+    fi
+    ASSETS+=("$DB_ZIP")
+    [ -f "$SDK_DIR/releases/$TARGET/$CORE.downloader.ini" ] && \
+        ASSETS+=("$SDK_DIR/releases/$TARGET/$CORE.downloader.ini")
 fi
-for extra in "$SDK_DIR/releases/$TARGET/$CORE.json.zip" \
-             "$SDK_DIR/releases/$TARGET/$CORE.downloader.ini"; do
-    [ -f "$extra" ] && ASSETS+=("$extra")
-done
 
 # Preflight: the DB's flat URLs resolve to releases/latest/download/<basename>,
 # so a DB entry whose basename is not attached here 404s for every user who
@@ -166,7 +170,6 @@ done
 # bundle, and two different sd_paths sharing one basename (flat assets are keyed
 # by basename, so the second upload clobbers the first).  Check both BEFORE
 # creating the release.
-DB_ZIP="$SDK_DIR/releases/$TARGET/$CORE.json.zip"
 if [ -f "$DB_ZIP" ]; then
     _assets_list="$(mktemp)"
     printf '%s\n' "${ASSETS[@]}" > "$_assets_list"
@@ -223,7 +226,9 @@ echo -e "  core    : $CORE"
 echo -e "  tag     : $TAG"
 echo -e "  title   : $TITLE"
 echo -e "  asset   : ${ZIP#$SDK_DIR/}"
-echo -e "  extra   : ${#ASSETS[@]} flat asset(s) for the Downloader DB"
+if [ ${#ASSETS[@]} -gt 0 ]; then
+    echo -e "  extra   : ${#ASSETS[@]} flat asset(s) for the Downloader DB"
+fi
 echo -e "  notes   : $RANGE_DESC"
 echo -e "  mode    : $MODE_DESC"
 echo -e "${CYAN}────────────────────────────────────────────────────${RESET}"

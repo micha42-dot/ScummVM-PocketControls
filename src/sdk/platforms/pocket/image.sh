@@ -28,6 +28,9 @@ RT="$ROOT/runtime/pocket"   # pocket-specific artifacts (bank.ofsf stays at runt
 rm -rf "$OUT"
 mkdir -p "$(dirname "$OUT")"
 cp -r "$DIST" "$OUT"
+# dist/ may carry other targets' packaging inputs (dist/<app>/mister/); the
+# Pocket bundle is exactly the APF tree, so drop them from the staging.
+rm -rf "$OUT/mister"
 
 # Resolve the single Cores/<id>/ and Assets/<platform>/common dirs the APF
 # dist tree provides.  Build the paths explicitly (no "ls | head" string
