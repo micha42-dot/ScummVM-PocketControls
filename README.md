@@ -3,6 +3,10 @@
 
 ScummVM PocketControls adds gamepad-focused controls to ScummVM on the Analogue Pocket. It provides direct D-Pad character movement, a toggleable cursor mode, verb and hotspot navigation, and improved controller support for classic SCUMM adventure games. The included Windows scripts automatically patch and build the required ScummVM/OpenFPGA sources.
 
+The ScummVM_PocketControls_V20E.zip is a Windows build package for ScummVM PocketControls. It prepares the required OpenFPGA ScummVM sources, applies the PocketControls modifications and builds the customized Analogue Pocket core locally. The original upstream GitHub repository is not modified.
+
+If you just want to try ScummVM PocketControls without building it yourself, the first experimental build is available in the Releases section.
+
 # ScummVM for Analogue Pocket (openfpgaOS)
 
 A native port of [ScummVM](https://www.scummvm.org/) to the
